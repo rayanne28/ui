@@ -5495,6 +5495,7 @@ do
         }
 
         local PreviewObject = nil
+        local SourceCharacter = nil
         local WorldModel = Instance.new("WorldModel")
 
         local function CloneCharacterForViewport(Character)
@@ -5513,26 +5514,18 @@ do
                         if ChildClone:IsA("BaseScript") then
                             ChildClone.Disabled = true
                         end
+                        if ChildClone:IsA("BasePart") then
+                            ChildClone.Anchored = true
+                        end
                         ChildClone.Parent = Clone
                     end
                 end)
             end
 
-            if Clone:FindFirstChild("HumanoidRootPart") then
-                Clone.PrimaryPart = Clone.HumanoidRootPart
-            end
-
-            local Humanoid = Clone:FindFirstChildOfClass("Humanoid")
-            if Humanoid then
-                Humanoid:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
-                Humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
-                Humanoid.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
-                Humanoid.NameDisplayDistance = 0
-                Humanoid.HealthDisplayDistance = 0
-            end
-
             for _, Desc in pairs(Clone:GetDescendants()) do
-                if Desc:IsA("BaseScript") then
+                if Desc:IsA("BasePart") then
+                    Desc.Anchored = true
+                elseif Desc:IsA("BaseScript") then
                     Desc:Destroy()
                 elseif Desc:IsA("Sound") then
                     Desc:Destroy()
@@ -5541,7 +5534,42 @@ do
                 end
             end
 
+            if Clone:FindFirstChild("HumanoidRootPart") then
+                Clone.PrimaryPart = Clone.HumanoidRootPart
+            end
+
+            local Humanoid = Clone:FindFirstChildOfClass("Humanoid")
+            if Humanoid then
+                pcall(function() Humanoid:SetStateEnabled(Enum.HumanoidStateType.Dead, false) end)
+                pcall(function() Humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None end)
+                pcall(function() Humanoid.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff end)
+                pcall(function() Humanoid.NameDisplayDistance = 0 end)
+                pcall(function() Humanoid.HealthDisplayDistance = 0 end)
+            end
+
             return Clone
+        end
+
+        local function SyncCFrames()
+            if not SourceCharacter or not SourceCharacter.Parent then return end
+            if not PreviewObject or not PreviewObject.Parent then return end
+
+            local srcRoot = SourceCharacter:FindFirstChild("HumanoidRootPart")
+            local dstRoot = PreviewObject:FindFirstChild("HumanoidRootPart")
+            if not srcRoot or not dstRoot then return end
+
+            local offset = dstRoot.CFrame * srcRoot.CFrame:Inverse()
+
+            for _, srcPart in pairs(SourceCharacter:GetDescendants()) do
+                if srcPart:IsA("BasePart") then
+                    local dstPart = PreviewObject:FindFirstChild(srcPart.Name, true)
+                    if dstPart and dstPart:IsA("BasePart") then
+                        pcall(function()
+                            dstPart.CFrame = offset * srcPart.CFrame
+                        end)
+                    end
+                end
+            end
         end
 
         local function BuildCharacterFromDescription()
@@ -5600,6 +5628,7 @@ do
         if typeof(Info.Object) == "Instance" then
             pcall(function()
                 PreviewObject = CloneCharacterForViewport(Info.Object)
+                SourceCharacter = Info.Object
             end)
         end
 
@@ -5608,6 +5637,7 @@ do
                 local Character = LocalPlayer and LocalPlayer.Character
                 if Character and Character:FindFirstChild("HumanoidRootPart") then
                     PreviewObject = CloneCharacterForViewport(Character)
+                    SourceCharacter = Character
                 end
             end)
         end
@@ -6018,8 +6048,6 @@ do
             end
         end
 
-        local SkeletonUpdateConnection = nil
-
         local PreviewChams = Instance.new("Highlight")
         PreviewChams.FillTransparency = ChamsConfig.FillTransparency
         PreviewChams.OutlineTransparency = ChamsConfig.OutlineTransparency
@@ -6027,27 +6055,97 @@ do
         PreviewChams.Enabled = false
         PreviewChams.Parent = PreviewObject
 
-        local function RepositionElements()
-            local HalfBox = BoxWidth / 2
-            local ShiftX = 0
+        local function GetProjectedBoundingBox()
+            if not PreviewObject or not PreviewObject.Parent then return nil end
 
-            if ESPPreview.ShowHealthbar and HealthbarSide == "Left" then
-                ShiftX = HealthbarWidth / 2 + 2
-            elseif ESPPreview.ShowHealthbar and HealthbarSide == "Right" then
-                ShiftX = -(HealthbarWidth / 2 + 2)
+            local vpAbsSize = ViewportFrame.AbsoluteSize
+            if vpAbsSize.X < 1 or vpAbsSize.Y < 1 then return nil end
+
+            local minX, minY = math.huge, math.huge
+            local maxX, maxY = -math.huge, -math.huge
+            local pointCount = 0
+
+            for _, part in pairs(PreviewObject:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    local cf = part.CFrame
+                    local size = part.Size / 2
+                    local corners = {
+                        cf * Vector3.new(size.X, size.Y, size.Z),
+                        cf * Vector3.new(-size.X, size.Y, size.Z),
+                        cf * Vector3.new(size.X, -size.Y, size.Z),
+                        cf * Vector3.new(-size.X, -size.Y, size.Z),
+                        cf * Vector3.new(size.X, size.Y, -size.Z),
+                        cf * Vector3.new(-size.X, size.Y, -size.Z),
+                        cf * Vector3.new(size.X, -size.Y, -size.Z),
+                        cf * Vector3.new(-size.X, -size.Y, -size.Z),
+                    }
+                    for _, corner in ipairs(corners) do
+                        local sp = WorldToViewport(corner, PreviewCamera, vpAbsSize)
+                        if sp then
+                            minX = math.min(minX, sp.X)
+                            minY = math.min(minY, sp.Y)
+                            maxX = math.max(maxX, sp.X)
+                            maxY = math.max(maxY, sp.Y)
+                            pointCount = pointCount + 1
+                        end
+                    end
+                end
             end
 
-            CornerBox.Position = UDim2.new(0.5, -HalfBox + ShiftX, 0.5, -BoxHeight / 2 + BoxOffset)
-            FullBox.Position = UDim2.new(0.5, -HalfBox + ShiftX, 0.5, -BoxHeight / 2 + BoxOffset)
+            if pointCount < 2 then return nil end
+            return {MinX = minX, MinY = minY, MaxX = maxX, MaxY = maxY, Width = maxX - minX, Height = maxY - minY}
+        end
 
+        local function UpdateOverlayPositions()
+            local bb = GetProjectedBoundingBox()
+            if not bb then return end
+
+            local vpAbsSize = ViewportFrame.AbsoluteSize
+            local bw = bb.Width
+            local bh = bb.Height
+            local cx = bb.MinX + bw / 2
+            local cy = bb.MinY + bh / 2
+
+            local padding = 4
+            local drawW = bw + padding * 2
+            local drawH = bh + padding * 2
+            local drawX = cx - drawW / 2
+            local drawY = cy - drawH / 2
+
+            CornerBox.Size = UDim2.fromOffset(drawW, drawH)
+            CornerBox.Position = UDim2.fromOffset(drawX, drawY)
+
+            FullBox.Size = UDim2.fromOffset(drawW, drawH)
+            FullBox.Position = UDim2.fromOffset(drawX, drawY)
+
+            HealthbarBg.Size = UDim2.fromOffset(HealthbarWidth, drawH)
             if HealthbarSide == "Left" then
-                HealthbarBg.Position = UDim2.new(0.5, -HalfBox - HealthbarWidth - 3 + ShiftX, 0.5, -BoxHeight / 2 + BoxOffset)
+                HealthbarBg.Position = UDim2.fromOffset(drawX - HealthbarWidth - 3, drawY)
             else
-                HealthbarBg.Position = UDim2.new(0.5, HalfBox + 3 + ShiftX, 0.5, -BoxHeight / 2 + BoxOffset)
+                HealthbarBg.Position = UDim2.fromOffset(drawX + drawW + 3, drawY)
             end
 
-            for _, Data in pairs(LabelInstances) do
-                Data.Instance.Position = UDim2.new(0.5, -HalfBox + ShiftX, 0.5, Data.BaseY)
+            local topY = drawY
+            local bottomY = drawY + drawH
+            local topOffset = 0
+            local bottomOffset = 0
+
+            for _, LabelConfig in ipairs(LabelConfigs) do
+                local data = LabelInstances[LabelConfig.Name]
+                if data then
+                    local labelOffset = if typeof(LabelConfig.Offset) == "number" then LabelConfig.Offset else 0
+                    local lx = cx - drawW / 2
+                    local ly
+                    data.Instance.Size = UDim2.fromOffset(drawW, 14)
+                    if LabelConfig.Position == "Top" then
+                        ly = topY - 14 - topOffset + labelOffset
+                        topOffset = topOffset + 14
+                    else
+                        ly = bottomY + 2 + bottomOffset + labelOffset
+                        bottomOffset = bottomOffset + 14
+                    end
+                    data.Instance.Position = UDim2.fromOffset(lx, ly)
+                end
             end
         end
 
@@ -6092,39 +6190,30 @@ do
         function ESPPreview:SetHealthbar(Enabled)
             ESPPreview.ShowHealthbar = Enabled
             HealthbarBg.Visible = Enabled
-            RepositionElements()
         end
 
         function ESPPreview:SetSkeleton(Enabled)
             ESPPreview.ShowSkeleton = Enabled
             SkeletonFrame.Visible = Enabled
-            if Enabled then
-                UpdateSkeletonLines()
-                if not SkeletonUpdateConnection then
-                    SkeletonUpdateConnection = RunService.RenderStepped:Connect(function()
-                        if Library.Unloaded then
-                            if SkeletonUpdateConnection then
-                                SkeletonUpdateConnection:Disconnect()
-                                SkeletonUpdateConnection = nil
-                            end
-                            return
-                        end
-                        if ESPPreview.ShowSkeleton then
-                            UpdateSkeletonLines()
-                        end
-                    end)
-                    Library:GiveSignal(SkeletonUpdateConnection)
-                end
-            else
-                if SkeletonUpdateConnection then
-                    SkeletonUpdateConnection:Disconnect()
-                    SkeletonUpdateConnection = nil
-                end
+            if not Enabled then
                 for _, line in ipairs(BoneLines) do
                     line.Visible = false
                 end
             end
         end
+
+        local MainUpdateConnection = RunService.RenderStepped:Connect(function()
+            if Library.Unloaded then
+                MainUpdateConnection:Disconnect()
+                return
+            end
+            SyncCFrames()
+            UpdateOverlayPositions()
+            if ESPPreview.ShowSkeleton then
+                UpdateSkeletonLines()
+            end
+        end)
+        Library:GiveSignal(MainUpdateConnection)
 
         function ESPPreview:SetChams(Enabled)
             ESPPreview.ShowChams = Enabled
@@ -6165,7 +6254,8 @@ do
             HealthbarFill.Position = UDim2.new(0, 1, 1 - ESPPreview.HealthPercent, 1)
         end
 
-        function ESPPreview:SetObject(Object, Clone)
+        function ESPPreview:SetObject(Object, Clone, Source)
+            local src = Source or Object
             if Clone then
                 local Cloned = CloneCharacterForViewport(Object)
                 if Cloned then
@@ -6177,21 +6267,23 @@ do
                 PreviewObject:Destroy()
             end
             PreviewObject = Object
+            SourceCharacter = src
             PreviewObject.Parent = WorldModel
             PreviewChams.Parent = PreviewObject
             if ESPPreview.ShowChams then
                 PreviewChams.Enabled = true
             end
             FocusCamera()
-            UpdateSkeletonLines()
         end
 
         function ESPPreview:RefreshCharacter()
             local newObj = nil
+            local newSrc = nil
             pcall(function()
                 local Character = LocalPlayer and LocalPlayer.Character
                 if Character and Character:FindFirstChild("HumanoidRootPart") then
                     newObj = CloneCharacterForViewport(Character)
+                    newSrc = Character
                 end
             end)
             if not newObj then
@@ -6200,7 +6292,7 @@ do
                 end)
             end
             if newObj then
-                ESPPreview:SetObject(newObj, false)
+                ESPPreview:SetObject(newObj, false, newSrc)
             end
         end
 
