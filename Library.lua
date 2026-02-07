@@ -5651,12 +5651,13 @@ do
 
         local function FocusCamera()
             local ModelSize = GetModelSize(PreviewObject)
-            local MaxExtent = math.max(ModelSize.X, ModelSize.Y, ModelSize.Z)
-            local CameraDistance = MaxExtent * 2
+            local HeightExtent = ModelSize.Y
+            local CameraDistance = HeightExtent * 1.2
             local ModelPosition = PreviewObject:GetPivot().Position
+            local LookAt = ModelPosition + Vector3.new(0, HeightExtent * 0.15, 0)
             PreviewCamera.CFrame = CFrame.new(
-                ModelPosition + Vector3.new(0, MaxExtent / 2, CameraDistance),
-                ModelPosition
+                LookAt + Vector3.new(0, 0, CameraDistance),
+                LookAt
             )
         end
 
@@ -5913,62 +5914,111 @@ do
             Parent = Overlay,
         })
 
-        local function CreateBoneLine(X1, Y1, X2, Y2, Parent)
-            local DX, DY = X2 - X1, Y2 - Y1
-            local Length = math.sqrt(DX * DX + DY * DY)
-            local Angle = math.deg(math.atan2(DY, DX))
+        local JointMap = {
+            Head = {"Head"},
+            UpperTorso = {"UpperTorso", "Torso"},
+            LowerTorso = {"LowerTorso", "Torso"},
+            LeftShoulder = {"LeftUpperArm", "Left Arm"},
+            LeftElbow = {"LeftLowerArm", "Left Arm"},
+            LeftHand = {"LeftHand", "Left Arm"},
+            RightShoulder = {"RightUpperArm", "Right Arm"},
+            RightElbow = {"RightLowerArm", "Right Arm"},
+            RightHand = {"RightHand", "Right Arm"},
+            LeftHip = {"LeftUpperLeg", "Left Leg"},
+            LeftKnee = {"LeftLowerLeg", "Left Leg"},
+            LeftFoot = {"LeftFoot", "Left Leg"},
+            RightHip = {"RightUpperLeg", "Right Leg"},
+            RightKnee = {"RightLowerLeg", "Right Leg"},
+            RightFoot = {"RightFoot", "Right Leg"},
+        }
+
+        local function FindJointPart(model, jointName)
+            local names = JointMap[jointName]
+            if not names then return nil end
+            for _, name in ipairs(names) do
+                local part = model:FindFirstChild(name, true)
+                if part and part:IsA("BasePart") then
+                    return part
+                end
+            end
+            return nil
+        end
+
+        local function WorldToViewport(worldPos, camera, vpAbsSize)
+            local cf = camera.CFrame
+            local relative = cf:PointToObjectSpace(worldPos)
+            local fov = math.rad(camera.FieldOfView / 2)
+            local aspect = vpAbsSize.X / vpAbsSize.Y
+            local tanFov = math.tan(fov)
+
+            if relative.Z > -0.01 then return nil end
+
+            local screenX = (-relative.X / (-relative.Z * tanFov * aspect)) * 0.5 + 0.5
+            local screenY = (relative.Y / (-relative.Z * tanFov)) * 0.5 + 0.5
+
+            return Vector2.new(screenX * vpAbsSize.X, screenY * vpAbsSize.Y)
+        end
+
+        local BoneLines = {}
+        for i, _ in ipairs(SkeletonConfig.Connections) do
             local Line = Library:Create("Frame", {
                 BackgroundColor3 = SkeletonConfig.Color,
                 BorderSizePixel = 0,
                 AnchorPoint = Vector2.new(0.5, 0.5),
-                Position = UDim2.fromOffset((X1 + X2) / 2, (Y1 + Y2) / 2),
-                Size = UDim2.fromOffset(Length, SkeletonConfig.Thickness),
-                Rotation = Angle,
+                Position = UDim2.fromOffset(0, 0),
+                Size = UDim2.fromOffset(0, SkeletonConfig.Thickness),
+                Rotation = 0,
+                Visible = false,
                 ZIndex = 11,
-                Parent = Parent,
+                Parent = SkeletonFrame,
             })
             Library:Create("UIStroke", {
                 Color = Color3.new(0, 0, 0),
                 Thickness = 1,
                 Parent = Line,
             })
-            return Line
+            BoneLines[i] = Line
         end
 
-        local ViewportWidth = 300
-        local ViewportHeight = ESPPreview.Height
-        local CX = ViewportWidth / 2
-        local CY = ViewportHeight / 2
+        local function UpdateSkeletonLines()
+            if not ESPPreview.ShowSkeleton or not PreviewObject then
+                for _, line in ipairs(BoneLines) do
+                    line.Visible = false
+                end
+                return
+            end
 
-        local SkelPoints = SkeletonConfig.Points
-        if not next(SkelPoints) then
-            SkelPoints = {
-                Head = {CX, CY - 52},
-                UpperTorso = {CX, CY - 38},
-                LowerTorso = {CX, CY - 15},
-                LeftShoulder = {CX - 18, CY - 38},
-                LeftElbow = {CX - 25, CY - 20},
-                LeftHand = {CX - 28, CY - 5},
-                RightShoulder = {CX + 18, CY - 38},
-                RightElbow = {CX + 25, CY - 20},
-                RightHand = {CX + 28, CY - 5},
-                LeftHip = {CX - 8, CY - 15},
-                LeftKnee = {CX - 10, CY + 10},
-                LeftFoot = {CX - 10, CY + 30},
-                RightHip = {CX + 8, CY - 15},
-                RightKnee = {CX + 10, CY + 10},
-                RightFoot = {CX + 10, CY + 30},
-            }
-        end
+            local vpAbsSize = ViewportFrame.AbsoluteSize
+            if vpAbsSize.X < 1 or vpAbsSize.Y < 1 then return end
 
-        local BoneLines = {}
-        for _, Connection in pairs(SkeletonConfig.Connections) do
-            local P1 = SkelPoints[Connection[1]]
-            local P2 = SkelPoints[Connection[2]]
-            if P1 and P2 then
-                table.insert(BoneLines, CreateBoneLine(P1[1], P1[2], P2[1], P2[2], SkeletonFrame))
+            for i, Connection in ipairs(SkeletonConfig.Connections) do
+                local line = BoneLines[i]
+                local partA = FindJointPart(PreviewObject, Connection[1])
+                local partB = FindJointPart(PreviewObject, Connection[2])
+
+                if partA and partB then
+                    local posA = WorldToViewport(partA.Position, PreviewCamera, vpAbsSize)
+                    local posB = WorldToViewport(partB.Position, PreviewCamera, vpAbsSize)
+
+                    if posA and posB then
+                        local dx, dy = posB.X - posA.X, posB.Y - posA.Y
+                        local length = math.sqrt(dx * dx + dy * dy)
+                        local angle = math.deg(math.atan2(dy, dx))
+
+                        line.Position = UDim2.fromOffset((posA.X + posB.X) / 2, (posA.Y + posB.Y) / 2)
+                        line.Size = UDim2.fromOffset(length, SkeletonConfig.Thickness)
+                        line.Rotation = angle
+                        line.Visible = true
+                    else
+                        line.Visible = false
+                    end
+                else
+                    line.Visible = false
+                end
             end
         end
+
+        local SkeletonUpdateConnection = nil
 
         local PreviewChams = Instance.new("Highlight")
         PreviewChams.FillTransparency = ChamsConfig.FillTransparency
@@ -6048,6 +6098,32 @@ do
         function ESPPreview:SetSkeleton(Enabled)
             ESPPreview.ShowSkeleton = Enabled
             SkeletonFrame.Visible = Enabled
+            if Enabled then
+                UpdateSkeletonLines()
+                if not SkeletonUpdateConnection then
+                    SkeletonUpdateConnection = RunService.RenderStepped:Connect(function()
+                        if Library.Unloaded then
+                            if SkeletonUpdateConnection then
+                                SkeletonUpdateConnection:Disconnect()
+                                SkeletonUpdateConnection = nil
+                            end
+                            return
+                        end
+                        if ESPPreview.ShowSkeleton then
+                            UpdateSkeletonLines()
+                        end
+                    end)
+                    Library:GiveSignal(SkeletonUpdateConnection)
+                end
+            else
+                if SkeletonUpdateConnection then
+                    SkeletonUpdateConnection:Disconnect()
+                    SkeletonUpdateConnection = nil
+                end
+                for _, line in ipairs(BoneLines) do
+                    line.Visible = false
+                end
+            end
         end
 
         function ESPPreview:SetChams(Enabled)
@@ -6103,7 +6179,44 @@ do
             PreviewObject = Object
             PreviewObject.Parent = WorldModel
             PreviewChams.Parent = PreviewObject
+            if ESPPreview.ShowChams then
+                PreviewChams.Enabled = true
+            end
             FocusCamera()
+            UpdateSkeletonLines()
+        end
+
+        function ESPPreview:RefreshCharacter()
+            local newObj = nil
+            pcall(function()
+                local Character = LocalPlayer and LocalPlayer.Character
+                if Character and Character:FindFirstChild("HumanoidRootPart") then
+                    newObj = CloneCharacterForViewport(Character)
+                end
+            end)
+            if not newObj then
+                pcall(function()
+                    newObj = BuildCharacterFromDescription()
+                end)
+            end
+            if newObj then
+                ESPPreview:SetObject(newObj, false)
+            end
+        end
+
+        if LocalPlayer then
+            Library:GiveSignal(LocalPlayer.CharacterAdded:Connect(function(newChar)
+                task.defer(function()
+                    if Library.Unloaded then return end
+                    local hrp = newChar:WaitForChild("HumanoidRootPart", 10)
+                    if hrp and not Library.Unloaded then
+                        task.wait(0.5)
+                        if not Library.Unloaded then
+                            ESPPreview:RefreshCharacter()
+                        end
+                    end
+                end)
+            end))
         end
 
         function ESPPreview:Focus()
