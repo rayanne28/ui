@@ -5495,24 +5495,126 @@ do
         }
 
         local PreviewObject = nil
-        if typeof(Info.Object) == "Instance" then
-            PreviewObject = if Info.Clone ~= false then Info.Object:Clone() else Info.Object
-            for _, Desc in pairs(PreviewObject:GetDescendants()) do
-                if Desc:IsA("BaseScript") or Desc:IsA("Sound") then
+        local WorldModel = Instance.new("WorldModel")
+
+        local function CloneCharacterForViewport(Character)
+            local Clone = Instance.new("Model")
+            Clone.Name = Character.Name
+
+            for _, Child in pairs(Character:GetChildren()) do
+                if Child:IsA("BaseScript") or Child:IsA("Sound") or Child:IsA("ForceField")
+                    or Child:IsA("BodyMover") or Child:IsA("Constraint") then
+                    continue
+                end
+
+                pcall(function()
+                    local ChildClone = Child:Clone()
+                    if ChildClone then
+                        if ChildClone:IsA("BaseScript") then
+                            ChildClone.Disabled = true
+                        end
+                        ChildClone.Parent = Clone
+                    end
+                end)
+            end
+
+            if Clone:FindFirstChild("HumanoidRootPart") then
+                Clone.PrimaryPart = Clone.HumanoidRootPart
+            end
+
+            local Humanoid = Clone:FindFirstChildOfClass("Humanoid")
+            if Humanoid then
+                Humanoid:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
+                Humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+                Humanoid.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
+                Humanoid.NameDisplayDistance = 0
+                Humanoid.HealthDisplayDistance = 0
+            end
+
+            for _, Desc in pairs(Clone:GetDescendants()) do
+                if Desc:IsA("BaseScript") then
+                    Desc:Destroy()
+                elseif Desc:IsA("Sound") then
+                    Desc:Destroy()
+                elseif Desc:IsA("BillboardGui") or Desc:IsA("SurfaceGui") then
                     Desc:Destroy()
                 end
             end
-        else
+
+            return Clone
+        end
+
+        local function BuildCharacterFromDescription()
+            local Desc = nil
             pcall(function()
-                local Character = LocalPlayer and LocalPlayer.Character
-                if Character then
-                    PreviewObject = Character:Clone()
-                    for _, Desc in pairs(PreviewObject:GetDescendants()) do
-                        if Desc:IsA("BaseScript") or Desc:IsA("Sound") then
-                            Desc:Destroy()
+                Desc = Players:GetHumanoidDescriptionFromUserId(LocalPlayer.UserId)
+            end)
+
+            if not Desc then return nil end
+
+            local Model = Instance.new("Model")
+            Model.Name = LocalPlayer.Name
+
+            local success = pcall(function()
+                local DummyDesc = Players:CreateHumanoidModelFromDescription(Desc, Enum.HumanoidRigType.R15)
+                for _, Child in pairs(DummyDesc:GetChildren()) do
+                    pcall(function()
+                        local ChildClone = Child:Clone()
+                        if ChildClone then
+                            if ChildClone:IsA("BaseScript") then
+                                ChildClone.Disabled = true
+                            end
+                            ChildClone.Parent = Model
                         end
+                    end)
+                end
+
+                if Model:FindFirstChild("HumanoidRootPart") then
+                    Model.PrimaryPart = Model.HumanoidRootPart
+                end
+
+                local Hum = Model:FindFirstChildOfClass("Humanoid")
+                if Hum then
+                    Hum:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
+                    Hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+                    Hum.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
+                end
+
+                for _, D in pairs(Model:GetDescendants()) do
+                    if D:IsA("BaseScript") or D:IsA("Sound") then
+                        D:Destroy()
                     end
                 end
+
+                DummyDesc:Destroy()
+            end)
+
+            if not success or not Model:FindFirstChild("HumanoidRootPart") then
+                Model:Destroy()
+                return nil
+            end
+
+            return Model
+        end
+
+        if typeof(Info.Object) == "Instance" then
+            pcall(function()
+                PreviewObject = CloneCharacterForViewport(Info.Object)
+            end)
+        end
+
+        if not PreviewObject then
+            pcall(function()
+                local Character = LocalPlayer and LocalPlayer.Character
+                if Character and Character:FindFirstChild("HumanoidRootPart") then
+                    PreviewObject = CloneCharacterForViewport(Character)
+                end
+            end)
+        end
+
+        if not PreviewObject then
+            pcall(function()
+                PreviewObject = BuildCharacterFromDescription()
             end)
         end
 
