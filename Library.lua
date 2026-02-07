@@ -5695,7 +5695,9 @@ do
             ZIndex = 7,
         })
 
-        PreviewObject.Parent = ViewportFrame
+        WorldModel.Parent = ViewportFrame
+        PreviewCamera.Parent = ViewportFrame
+        PreviewObject.Parent = WorldModel
         FocusCamera()
 
         local Dragging = false
@@ -6089,19 +6091,17 @@ do
 
         function ESPPreview:SetObject(Object, Clone)
             if Clone then
-                Object = Object:Clone()
+                local Cloned = CloneCharacterForViewport(Object)
+                if Cloned then
+                    Object = Cloned
+                end
             end
             if PreviewObject then
                 PreviewChams.Parent = nil
                 PreviewObject:Destroy()
             end
             PreviewObject = Object
-            for _, Desc in pairs(PreviewObject:GetDescendants()) do
-                if Desc:IsA("BaseScript") or Desc:IsA("Sound") then
-                    Desc:Destroy()
-                end
-            end
-            PreviewObject.Parent = ViewportFrame
+            PreviewObject.Parent = WorldModel
             PreviewChams.Parent = PreviewObject
             FocusCamera()
         end
